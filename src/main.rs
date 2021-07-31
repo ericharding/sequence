@@ -1,33 +1,47 @@
 #![allow(dead_code)]
+use std::collections::HashMap;
+use pcap_file::{ PcapReader, PcapWriter };
+use std::io::{BufReader, BufWriter};
+use std::fs::File;
 use clap::{App, Arg};
 mod decode;
 mod exchange;
 use exchange::{SequenceDecoder, Range};
 
-fn decode_udp(p: decode::UdpPacket, decoder: &SequenceDecoder) {
+
+fn get_stream_context(dest_addr : decode::IPv4Addr, dest_port : u16, context : &mut  Context) -> &mut StreamContext {
+    //todo
+}
+
+fn decode_udp(ip_packet : decode::IPv4Packet, udp_packet: decode::UdpPacket, context: &mut Context) {
     // let range = decoder.get_sequence(p.data());
-    let range = decoder(p.data());
+    let stream = get_stream_context(ip_packet.dest(), udp_packet.dst_port(), context);
+    let range = (context.decoder)(p.data());
+    if range.begin != stream.expected_seq {
+        // gap!
+        // Check if we're still in the same as the previous gap and if so increment the count
+    }
     print!("{}->{}", range.begin, range.count);
 }
 
-fn decode_ip(p: decode::IPPacket, decoder: &SequenceDecoder) -> i32 {
+fn decode_ip(p: decode::IPPacket, context: &mut Context) -> i32 {
     if let decode::IPPacket::IPv4(packet) = p {
         if let decode::ProtocolPacket::UDP(udp) = packet.protocol() {
-            decode_udp(udp, decoder);
+            decode_udp(packet, udp, context);
         }
     }
     0
 }
 
-fn decode_ethernet(data: &[u8], decoder: &SequenceDecoder) -> i32 {
+fn decode_ethernet(data: &[u8], context: &mut Context) -> i32 {
     if let Some(frame) = decode::EthernetFrame::new(data) {
-        return decode_ip(frame.protocol(), decoder);
+        return decode_ip(frame.protocol(), context);
     }
     return 0;
 }
-fn decode_linux_cooked(data: &[u8], decoder: &SequenceDecoder) -> i32 {
+fn decode_linux_cooked(data: &[u8], context: &mut Context) -> i32 {
     if let Some(frame) = decode::LinuxCooked::new(data) {
-        return decode_ip(frame.protocol(), decoder);
+        return decode_ip(frame.protocol(), context);
     }
     0
 }
@@ -61,16 +75,22 @@ fn get_exchange(cme: bool, cboe: bool, ice: bool) -> Option<Exchange> {
 }
 
 struct StreamContext {
-    last_seq : u64,
+    expected_seq : u64,
     missing : Vec<Range>
 }
 
-struct Context<'a> {
-    pub decoder : &'a SequenceDecoder
-    // map of ip,port destination to 
+#[derive(Copy,Clone,PartialEq,Eq,Hash,Debug)]
+struct StreamKey {
+    addr : decode::IPv4Addr,
+    port : u16
 }
 
-fn main_impl(source : &str, exchange: Exchange, config: Option<Config>) {
+struct Context<'a> {
+    pub decoder : &'a SequenceDecoder,
+    pub stream_context : HashMap<StreamKey, StreamContext>
+}
+
+fn main_impl(filename : &str, exchange: Exchange, config: Option<Config>) {
     // create the apropriate sequence decoder
     let decoder : &SequenceDecoder =
         match exchange {
@@ -78,8 +98,21 @@ fn main_impl(source : &str, exchange: Exchange, config: Option<Config>) {
             Exchange::CME => &exchange::cme::get_sequence,
             _ => &|_data| exchange::Range { begin: 0, count: 0 }
         };
+
+    // Open the pcap file
+    let file_in = File::open(filename).expect("Error opening file");
+    let reader = BufReader::new(file_in);
+    let pcap_reader = PcapReader::new(reader).unwrap();
+    let data_layer = pcap_reader.header.datalink;
+
+    let mut pcap_writer = {
+        if let Some(c) = config {
+            let file_out = BufWriter::new(File::create(c.output).expect("Error opening output file"));
+            Some(PcapWriter::new(file_out).unwrap())
+        }
+        else { None }
+    };
     
-    // parse each packet and determine it's ip range and 
 }
 
 fn main() {
