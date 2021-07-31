@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::collections::hash_map::Entry::{ Vacant, Occupied };
 use std::collections::HashMap;
 use pcap_file::{ PcapReader, PcapWriter };
 use std::io::{BufReader, BufWriter};
@@ -9,14 +10,18 @@ mod exchange;
 use exchange::{SequenceDecoder, Range};
 
 
-fn get_stream_context(dest_addr : decode::IPv4Addr, dest_port : u16, context : &mut  Context) -> &mut StreamContext {
-    //todo
+fn get_stream_context<'a>(dest_addr : &decode::IPv4Addr, dest_port : u16, context : &'a mut Context) -> &'a mut StreamContext {
+    let key = StreamKey::new(dest_addr, dest_port);
+    match context.stream_context.entry(key) {
+        Occupied(entry) => entry.into_mut(),
+        Vacant(entry) => entry.insert(StreamContext::new()),
+    }
 }
 
 fn decode_udp(ip_packet : decode::IPv4Packet, udp_packet: decode::UdpPacket, context: &mut Context) {
     // let range = decoder.get_sequence(p.data());
-    let stream = get_stream_context(ip_packet.dest(), udp_packet.dst_port(), context);
-    let range = (context.decoder)(p.data());
+    let stream = get_stream_context(&ip_packet.dest(), udp_packet.dst_port(), context);
+    let range = (context.decoder)(udp_packet.data());
     if range.begin != stream.expected_seq {
         // gap!
         // Check if we're still in the same as the previous gap and if so increment the count
@@ -78,11 +83,21 @@ struct StreamContext {
     expected_seq : u64,
     missing : Vec<Range>
 }
+impl StreamContext {
+    fn new() -> StreamContext {
+        StreamContext { expected_seq: 0, missing: vec![] }
+    }
+}
 
 #[derive(Copy,Clone,PartialEq,Eq,Hash,Debug)]
 struct StreamKey {
     addr : decode::IPv4Addr,
     port : u16
+}
+impl StreamKey {
+    fn new(addr : &decode::IPv4Addr, port : u16) -> StreamKey {
+        StreamKey { addr: addr.clone(), port : port }
+    }
 }
 
 struct Context<'a> {
